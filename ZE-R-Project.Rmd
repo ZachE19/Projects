@@ -1,0 +1,407 @@
+---
+title: "Zach Elsass' R Project - Chess Openings"
+output:
+  html_document:
+    theme: spacelab
+    highlight: tango
+---
+
+
+In my project I will be looking at chess openings and try to determine if certain openings are statistically different, better, than playing randomly without any opening in particular.
+
+In the data set there are approximately 20 thousand games with 17 different variables. Each game has data such as: ratings of both players, number of turns, winner, opening name, how the game ended (resign, checkmate, time), and if it was a rated game. For this project I will be using winner, opening name, and number of turns.
+
+The winner variable is rather simple, it has 3 outcomes: white, black, or draw. I will be doing analysis for each of the three outcomes.
+
+In chess there are many different openings, an opening is generally the first 5-10 moves of the game. In this data set there are 1477 unique openings, I merge openings that are similar to make 62 distinct openings from which analysis is done. In the opening, players battle for an advantage to bring into the rest of the game. Therefore, in this project I am assuming the opening played leads to an advantage or disadvantage that changes the outcome of the game in a meaningful way.
+
+For number of turns, it is an integer. I am curious to see if there is some correlation between statistically significant openings and number of turns.  
+
+```{r, echo=FALSE}
+data <- read.csv("games.csv")
+```
+
+```{r, echo=FALSE}
+#Population stuff
+win_table = table(data$winner)
+Sample_Size_pop = length(data$winner)
+White_winrate_pop = win_table[names(win_table)=="white"]/length(data$winner)
+Black_winrate_pop = win_table[names(win_table)=="black"]/length(data$winner)
+Draw_rate_pop = eval(1-White_winrate_pop-Black_winrate_pop)
+Total_rate = mean(White_winrate_pop,Black_winrate_pop,Draw_rate_pop)
+
+#The win and draw rates are similar to Bernoulli random variables with p as the respective rate
+#A world championship tournament has 12 games, so we now have 3 random variables with n and p respective to their rate (6 games with White and with Black)
+#If we observe and conduct many trials these random variable become Normal(np,sd = np(1-p)) by the CLT
+#Therefore:
+w_mu_pop = 6*White_winrate_pop
+b_mu_pop = 6*Black_winrate_pop
+d_mu_pop = 12*Draw_rate_pop
+Total_mu = 12*Total_rate
+
+w_sd_pop = sqrt(6*White_winrate_pop*(1-White_winrate_pop))
+b_sd_pop = sqrt(6*Black_winrate_pop*(1-Black_winrate_pop))
+d_sd_pop = sqrt(12*Draw_rate_pop*(1-Draw_rate_pop))
+Total_sd = sqrt(12*Total_rate*(1-Total_rate))
+
+turns_pop = mean(data$turns)
+
+#H0 = mu = _mu_pop 
+#H1 = mu > _mu_pop
+alpha = 0.05
+
+Statistics = data.frame(row.names = "Population",Sample_Size_pop,White_winrate_pop,Black_winrate_pop,Draw_rate_pop,w_mu_pop,b_mu_pop,d_mu_pop,w_sd_pop,b_sd_pop,d_sd_pop,0,0,0,turns_pop)
+names(Statistics) = c("Sample Size",
+                      "White%",
+                      "Black%",
+                      "Draw%",
+                      "White mu",
+                      "Black mu",
+                      "Draw mu",
+                      "White sd",
+                      "Black sd",
+                      "Draw sd",
+                 "W Rejection Region",
+                 "B Rejection Region",
+                 "D Rejection Region",
+                 "Average Turns")
+```
+___________________________________
+
+Because the winner variable is categorical, I had to transform the variable in a way that both makes sense and can be used in statistical analysis.
+
+The win and draw rates are similar to Bernoulli random variables with p as the respective rate
+$$X_i \sim Bernoulli(p_i) \ \ i ={white, black,draw, pop.}$$ 
+
+A world championship tournament has 12 games, so we now have 3 random variables with n and p respective to their rate (6 games with White and with Black, 12 for population and draw)
+$$Y_i \sim Binom(6, p_i) \ \ i ={white, black,draw, pop.}$$ 
+
+[Source: Number of games played in tournaments](https://en.wikipedia.org/wiki/World_Chess_Championship_2018)
+
+If we observe and conduct many trials these random variable become by the CLT: $$W_i \sim N(np_i, var =np_i(1-p_i)) \ \ i ={white, black,draw, pop.}$$ 
+
+
+For the population we have:
+$$W_P \sim N(5.98,sd=1.73)$$
+```{r,echo=FALSE}
+hist_pop = rnorm(1000,5.98,1.73)
+hist(hist_pop, xlab="Average Score in 12 Games")
+```
+
+
+Sub-setting population by White, Black, and Draw
+$$W_W \sim N(2.99,sd=1.22)$$
+```{r,echo=FALSE}
+hist_pop = rnorm(1000,2.99,1.22)
+hist(hist_pop, xlab="Average Score Playing White")
+```
+
+$$W_B \sim N(2.72,sd=1.22)$$ 
+```{r,echo=FALSE}
+hist_pop = rnorm(1000,2.72,1.22)
+hist(hist_pop, xlab="Average Score Playing Black")
+```
+
+$$W_D \sim N(0.568,sd=0.736)$$ 
+```{r,echo=FALSE}
+hist_pop = rnorm(1000,.568,0.736)
+hist(hist_pop, xlab="Average Score from Draws")
+```
+
+The population distribution means with random play you can expect a score of 6 with a std dev of 1.7.
+
+This means that in a tournament, with random play you would expect 2.99 wins with white, 2.72 wins with black, and 0.568 draws with respective standard deviations.
+
+When evaluating openings, I used the subsets of white, black, and draw for confidence intervals and to test hypothesis' for each opening
+
+____________________________
+
+In order to run meaningful analysis' on the data, I merged all the different sidelines of an opening. The resulted in a condensing the 1477 unique openings to 119. However, some of these 119 only had a handful of games. So I deleted any openings that had less than 30 observations. After this, there were 62 openings from which I ran my hypothesis test. 
+
+```{r,echo=FALSE}
+#Formatting Openings
+Openings <- c(unique(data$opening_name))
+unique_Openings=length(Openings)
+
+Open_no_punc <- gsub('[[:punct:]]+','',data$opening_name)
+List_Openings <- c()
+
+for(i in 1:length(Open_no_punc)){
+  spaces <- which(strsplit(Open_no_punc[i], "")[[1]]==" ")
+
+b <- ifelse(is.na(substr(Open_no_punc[i],0,spaces[2]-1))==FALSE,substr(Open_no_punc[i],0,spaces[2]-1),Open_no_punc[i])
+
+List_Openings <- c(List_Openings,b)
+}
+Condensed_Openings = unique(List_Openings)
+data$betterNames = List_Openings
+CO_precut = Condensed_Openings
+```
+
+```{r,echo=FALSE}
+#Creating Tables
+for(i in 1:length(Condensed_Openings)){
+x  = Condensed_Openings[i]
+Table_i = data[data$betterNames == Condensed_Openings[i],]
+  assign(paste(x), Table_i)    
+}
+```
+
+```{r,echo=FALSE}
+#Cutting Small openings
+Small = c()
+for(i in 1:length(Condensed_Openings)){
+  temp = length(get(Condensed_Openings[i])$winner)
+  if(temp<30){
+    Small = c(Small, Condensed_Openings[i])
+  }
+}
+Condensed_Openings = Condensed_Openings[! Condensed_Openings %in% Small]
+#Removing Small tables
+Cut_Openings = CO_precut[! CO_precut %in% Condensed_Openings]
+remove(list=Cut_Openings)
+```
+
+For each opening, my hypothesis was:
+$$ H_0: \mu = \text{mu of white/black/draw population}$$ 
+$$ H_1: \mu > \text{mu of white/black/draw population} $$
+With an alpha of 0.05
+
+The goal of this hypothesis is to determine which openings have a statistically significant higher mu than the population. As stated in the beginning, the population would be as if one had played randomly in the opening. So, does having a plan in the opening lead to better outcomes? If so, are there certain opening plans that are best?
+
+```{r,echo=FALSE}
+#Openings' Stats
+
+for(i in 1:length(Condensed_Openings)){
+  data_set = get(Condensed_Openings[i])
+  win_table = table(data_set$winner)
+  Sample_Size_i=length(data_set$winner)
+  White_winrate_i = win_table[names(win_table)=="white"]/length(data_set$winner)
+
+  Black_winrate_i = win_table[names(win_table)=="black"]/length(data_set$winner)
+  
+Draw_rate_i = round(eval(1-White_winrate_i-Black_winrate_i), 7)
+  
+w_mu_i = 6*White_winrate_i
+b_mu_i = 6*Black_winrate_i
+d_mu_i = 12*Draw_rate_i
+
+w_sd_i = sqrt(6*White_winrate_i*(1-White_winrate_i))
+b_sd_i = sqrt(6*Black_winrate_i*(1-Black_winrate_i))
+d_sd_i = sqrt(12*Draw_rate_i*(1-Draw_rate_i))
+#These are sample mean rejection regions, I am using opening means as the sample and the pop as the total
+
+#I divide by 12 because 12 make a Bernoulli rv as stated earlier
+
+W_reject_region = qnorm(1-alpha, 0,1)*w_sd_pop/sqrt(Sample_Size_i/12) + w_mu_pop
+
+B_reject_region = qnorm(1-alpha, 0,1)*b_sd_pop/sqrt(Sample_Size_i/12) + b_mu_pop
+
+D_reject_region = qnorm(1-alpha, 0,1)*d_sd_pop/sqrt(Sample_Size_i/12) + d_mu_pop
+
+turns_i = mean(data_set$turns)
+
+ temp = data.frame(row.names = Condensed_Openings[i],Sample_Size_i, 
+                   White_winrate_i,
+                   Black_winrate_i,
+                   Draw_rate_i,
+                   w_mu_i,
+                   b_mu_i,
+                   d_mu_i,
+                   w_sd_i,
+                   b_sd_i,
+                   d_sd_i,
+                   W_reject_region,
+                   B_reject_region,
+                   D_reject_region,
+                   turns_i)
+ names(temp) = c("Sample Size",
+                 "White%",
+                 "Black%",
+                 "Draw%",
+                 "White mu",
+                 "Black mu",
+                 "Draw mu",
+                 "White sd",
+                 "Black sd",
+                 "Draw sd",
+                 "W Rejection Region",
+                 "B Rejection Region",
+                 "D Rejection Region",
+                 "Average Turns")
+ 
+ Statistics = rbind(Statistics,temp)
+}
+```
+
+```{r,echo=FALSE}
+Sig_w= c()
+Sig_b= c()
+Sig_d= c()
+
+for(i in 1:length(Condensed_Openings)){
+ temp = Statistics[i+1,11]
+ test = Statistics[i+1,5]
+
+ if(temp < test){
+   Sig_w = c(Sig_w,row.names.data.frame(Statistics[i+1,]))
+ }
+}
+for(i in 1:length(Condensed_Openings)){
+ temp = Statistics[i+1,12]
+ test = Statistics[i+1,6]
+ 
+ if(temp < test){
+   Sig_b= c(Sig_b,row.names.data.frame(Statistics[i+1,]))
+ }
+}
+for(i in 1:length(Condensed_Openings)){
+ temp = Statistics[i+1,13]
+ test = Statistics[i+1,7]
+ 
+ if(temp < test){
+   Sig_d= c(Sig_d,row.names.data.frame(Statistics[i+1,]))
+ }
+}
+```
+At alpha of 5%, there are around 5 openings, per white/black/draw, that are statistically significant, compared to playing randomly.
+
+These are the openings that are statistically significantly better for white:
+
+Nimzowitsch Defense          
+Philidor Defense       
+English Opening    
+Queens Gambit         
+Bishops Opening  
+Russian Game     
+Kings Gambit   
+
+For black:
+
+Sicilian Defense        
+Vant Kruijs     
+Indian Game     
+Mieses Opening       
+Grob Opening
+
+For draw, this one means that these openings are statistically significantly more likely to end in a draw:
+
+Slav Defense     
+Zukertort Opening     
+Benoni Defense   
+Kings Indian    
+Bird Opening    
+SemiSlav Defense     
+Reti Opening      
+
+The other 43 openings are not statistically any different than playing randomly at an alpha of 0.05
+
+___________________________
+
+While I could stop here with the list of statistically significant openings, some of them are more difficult to get in a game. For example, when playing white the Nimzowitsch Defense only occurs when black plays this defense.
+
+Luckily, within each list there are one or two that can nearly always be obtained.
+
+For white, the English Opening can always be obtained by playing c4. 
+
+For black, it becomes slightly more difficult as you play second and therefore respond to white. Two of the most played first moves from white are d4 and e4. We have an opening for each:
+
+Sicilian Defense against e4        
+Indian Game against d4
+
+If you are trying to secure a draw, there isn't an easy option for black. However, for white the Bird Opening immediately occurs after f4.
+
+______________________________
+
+From here I calculated the confidence intervals of the 4 best, in my opinion, of the statistically significant openings: English Opening, Sicilian Defense, Indian Game, and Bird Opening. The following are the confidence intervals in their respective statistically significant areas.
+
+```{r,echo=FALSE}
+#Confidence intervals
+
+Eng_mean = Statistics[15,5]
+Sic_mean = Statistics[7,6]
+Ind_mean = Statistics[19,6]
+Bird_mean = Statistics[42,7]
+
+Eng_sd = Statistics[1,8]
+Sic_sd = Statistics[1,9]
+Ind_sd = Statistics[1,9]
+Bird_sd = Statistics[1,10]
+
+Eng_n = Statistics[15,1]
+Sic_n = Statistics[7,1]
+Ind_n = Statistics[19,1]
+Bird_n = Statistics[42,1]
+
+z_score = abs(qnorm(alpha,0,1))
+
+Upper_CI_Eng = Eng_mean + z_score*(Eng_sd/sqrt(Eng_n))
+Lower_CI_Eng = Eng_mean - z_score*(Eng_sd/sqrt(Eng_n))
+
+Upper_CI_Sic = Sic_mean + z_score*(Sic_sd/sqrt(Sic_n))
+Lower_CI_Sic = Sic_mean - z_score*(Sic_sd/sqrt(Sic_n))
+
+Upper_CI_Ind = Ind_mean + z_score*(Ind_sd/sqrt(Ind_n))
+Lower_CI_Ind = Ind_mean - z_score*(Ind_sd/sqrt(Ind_n))
+
+Upper_CI_Bird =Bird_mean + z_score*(Bird_sd/sqrt(Bird_n)) 
+Lower_CI_Bird = Bird_mean - z_score*(Bird_sd/sqrt(Bird_n))
+
+print("English Opening")
+print(c(Lower_CI_Eng ,Upper_CI_Eng))
+print("Sicilian Defense")
+print(c(Lower_CI_Sic ,Upper_CI_Sic))
+print("Indian Game")
+print(c(Lower_CI_Ind ,Upper_CI_Ind))
+print("Bird Opening")
+print(c(Lower_CI_Bird ,Upper_CI_Bird))
+
+```
+
+For each of these, I am 95% certain the true mu of these openings are between the upper and lower confidence intervals. Each of which are better than the mu's of playing randomly.
+
+________________________________
+
+Finally, I looked at mu's of all the openings and graphed them with average turns played. The red dots are the best statistically significant openings. Those being: English Opening for white, Sicilian Defense and Indian Game for black, and Bird Opening for a draw.
+
+```{r,echo=FALSE}
+#These plots are pretty cool
+
+plot(Statistics[,5],
+     Statistics[,14],
+     col = ifelse(Condensed_Openings == "English Opening", "red", "black"),
+     pch = ifelse(Condensed_Openings == "English Opening", 19, 1),
+     xlab="White_mu",
+     ylab="Average Turns")
+
+plot(Statistics[,6],
+     Statistics[,14],
+     col = ifelse(Condensed_Openings == "Sicilian Defense"|Condensed_Openings == "Indian Game", "red", "black"),
+     pch = ifelse(Condensed_Openings == "Sicilian Defense"|Condensed_Openings == "Indian Game", 19, 1),
+     xlab="Black_mu",
+     ylab="Average Turns")
+
+plot(Statistics[,7],
+     Statistics[,14],
+     col = ifelse(Condensed_Openings == "Bird Opening", "red", "black"),
+     pch = ifelse(Condensed_Openings == "Bird Opening", 19, 1),
+     xlab="Draw_mu",
+     ylab="Average Turns")
+```
+
+It appears that for white and black there isn't anything interesting that can be ascertained. However, for a draw there seems to a weak correlation between a draw and turns played. This makes sense because as more and more moves are played in a game, the more opportunities there are to reach a draw, whether by repetition, checkmate being impossible, or an agreement.
+
+
+In sum, the English Opening, Sicilian Defense, Indian Game, and Bird Opening are the best choices for scoring well in a tournament. To clarify the moves that need to be made to enter these openings here is what is needed:
+
+English Opening:          
+1. c4
+
+Sicilian Defense:           
+1. e4 c5
+
+Indian Game:           
+1. d4 Nf6
+
+Bird Opening: (For a draw)          
+1. f4
